@@ -46,33 +46,21 @@ compile:
 commit:
 	@$(BUILDER) commit snapshot
 
-images:
+external-images = $(shell sed -n '/#external/{N;s/.* as  *//p;}' < $(BUILDER_HOME)/Dockerfile)
+images: $(addsuffix .docker.tag.dev,$(external-images))
+snapshot.docker.stamp:
 	@$(MAKE) --no-print-directory compile
 	@$(MAKE) --no-print-directory commit
-	@printf "$(WHT)==$(GRN)Building $(BLU)ambassador$(GRN) image$(WHT)==$(END)\n"
-	@$(DBUILD) $(BUILDER_HOME) --build-arg artifacts=snapshot --target ambassador -t ambassador
-	@printf "$(WHT)==$(GRN)Building $(BLU)kat-client$(GRN) image$(WHT)==$(END)\n"
-	@$(DBUILD) $(BUILDER_HOME) --build-arg artifacts=snapshot --target kat-client -t kat-client
-	@printf "$(WHT)==$(GRN)Building $(BLU)kat-server$(GRN) image$(WHT)==$(END)\n"
-	@$(DBUILD) $(BUILDER_HOME) --build-arg artifacts=snapshot --target kat-server -t kat-server
-
-AMB_IMAGE=$(DEV_REGISTRY)/ambassador:$(shell docker images -q ambassador:latest)
-KAT_CLI_IMAGE=$(DEV_REGISTRY)/kat-client:$(shell docker images -q kat-client:latest)
-KAT_SRV_IMAGE=$(DEV_REGISTRY)/kat-server:$(shell docker images -q kat-server:latest)
+	docker docker image inspect snapshot --format='{{.Id}}' > $@
+$(addsuffix .docker.stamp,$(external-images)): %.docker.stamp: snapshot.docker
+	@printf "$(WHT)==$(GRN)Building $(BLU)$*$(GRN) image$(WHT)==$(END)\n"
+	@$(DBUILD) $(BUILDER_HOME) --build-arg artifacts=$$(cat snapshot.docker) --target $*
+%.docker: %.docker.stamp $(COPY_IFCHANGED)
+	$(WRITE_IFCHANGED) $< $@
 
 export REGISTRY_ERR=$(RED)ERROR: please set the DEV_REGISTRY make/env variable to the docker registry\n       you would like to use for development$(END)
 
-push: images
-	@test -n "$(DEV_REGISTRY)" || (printf "$${REGISTRY_ERR}\n"; exit 1)
-	@printf "$(WHT)==$(GRN)Pushing $(BLU)ambassador$(GRN) image$(WHT)==$(END)\n"
-	docker tag ambassador $(AMB_IMAGE)
-	docker push $(AMB_IMAGE)
-	@printf "$(WHT)==$(GRN)Pushing $(BLU)kat-client$(GRN) image$(WHT)==$(END)\n"
-	docker tag kat-client $(KAT_CLI_IMAGE)
-	docker push $(KAT_CLI_IMAGE)
-	@printf "$(WHT)==$(GRN)Pushing $(BLU)kat-server$(GRN) image$(WHT)==$(END)\n"
-	docker tag kat-server $(KAT_SRV_IMAGE)
-	docker push $(KAT_SRV_IMAGE)
+push: $(addsuffix .docker.push.dev,$(external-images))
 
 export KUBECONFIG_ERR=$(RED)ERROR: please set the $(YEL)DEV_KUBECONFIG$(RED) make/env variable to the docker registry\n       you would like to use for development. Note this cluster must have access\n       to $(YEL)DEV_REGISTRY$(RED) ($(WHT)$(DEV_REGISTRY)$(RED))$(END)
 export KUBECTL_ERR=$(RED)ERROR: preflight kubectl check failed$(END)
@@ -94,9 +82,9 @@ PYTEST_ARGS ?=
 pytest: test-ready
 	@printf "$(WHT)==$(GRN)Running $(BLU)py$(GRN) tests$(WHT)==$(END)\n"
 	docker exec \
-		-e AMBASSADOR_DOCKER_IMAGE=$(AMB_IMAGE) \
-		-e KAT_CLIENT_DOCKER_IMAGE=$(KAT_CLI_IMAGE) \
-		-e KAT_SERVER_DOCKER_IMAGE=$(KAT_SRV_IMAGE) \
+		-e AMBASSADOR_DOCKER_IMAGE=$$(cat ambassador.docker.push.dev) \
+		-e KAT_CLIENT_DOCKER_IMAGE=$$(cat kat-client.docker.push.dev) \
+		-e KAT_SERVER_DOCKER_IMAGE=$$(cat kat-server.docker.push.dev) \
 		-e KAT_IMAGE_PULL_POLICY=Always \
 		-e KAT_REQ_LIMIT \
 		-it $(shell $(BUILDER)) pytest $(PYTEST_ARGS)
